@@ -31,7 +31,28 @@ base() {
   ! grep -qE 'FAILED|\.rej|Reversed' "$OUT/base.log" || die "a patch failed to apply"
 }
 
+binaries() {
+  # run-in-docker.sh mounts $HOME/.kube into the container, so give it an empty HOME
+  mkdir -p work/home
+  docker run --rm -v "$PWD/$SRC/rootfs:/r" "$ALPINE" rm -rf /r/bin
+  (cd "$SRC" && env HOME="$PWD/../home" ARCH=amd64 E2E_IMAGE="$GO_IMAGE" USE_SHELL=/bin/sh \
+    build/run-in-docker.sh MAC_OS= PKG=k8s.io/ingress-nginx ARCH=amd64 TAG="$CONTROLLER_TAG" \
+    COMMIT_SHA="git-${FORK_COMMIT:0:7}" REPO_INFO="$FORK_REPO" build/build.sh)
+}
+
+controller() {
+  make -C "$SRC" image REGISTRY=local TAG="$CONTROLLER_TAG" ARCH=amd64 BASE_IMAGE="${1:-$BASE}" \
+    BUILD_ID="$(git rev-parse --short HEAD 2>/dev/null || echo local)"
+  docker tag "local/controller:$CONTROLLER_TAG" "$CONTROLLER"
+  docker rmi -f "local/controller:$CONTROLLER_TAG" >/dev/null
+}
+
+clean() {
+  docker run --rm -v "$PWD:/r" "$ALPINE" rm -rf /r/work
+}
+
 case "${1:-build}" in
-  build) fetch; base ;;
-  *) die "usage: $0 [build]" ;;
+  build) fetch; base; binaries; controller ;;
+  clean) clean ;;
+  *) die "usage: $0 [build|clean]" ;;
 esac
