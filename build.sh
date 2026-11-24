@@ -64,12 +64,29 @@ verify() {
   echo "ok: controller $CONTROLLER_TAG, nginx $NGINX_VERSION ($NGINX_PATCHES patches), go $GO_VERSION"
 }
 
+push() {
+  docker push -q "$BASE"
+  local base_digest
+  base_digest=$(docker buildx imagetools inspect "$BASE" --format '{{json .Manifest}}' | jq -r .digest)
+  controller "$BASE@$base_digest"
+  verify
+  docker push -q "$CONTROLLER"
+  if [[ -n ${EXTRA_TAG:-} ]]; then
+    for image in "$BASE" "$CONTROLLER"; do
+      docker tag "$image" "${image%:*}:$EXTRA_TAG"
+      docker push -q "${image%:*}:$EXTRA_TAG"
+    done
+  fi
+  docker buildx imagetools inspect "$CONTROLLER" --format '{{json .Manifest}}' | jq -r '"'"$CONTROLLER"'@" + .digest' \
+    | tee "$OUT/image.txt"
+}
+
 clean() {
   docker run --rm -v "$PWD:/r" "$ALPINE" rm -rf /r/work
 }
 
 case "${1:-build}" in
   build) fetch; base; binaries; controller ;;
-  verify | clean) "$1" ;;
-  *) die "usage: $0 [build|verify|clean]" ;;
+  verify | push | clean) "$1" ;;
+  *) die "usage: $0 [build|verify|push|clean]" ;;
 esac
