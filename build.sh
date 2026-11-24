@@ -15,6 +15,7 @@ OUT=work/out
 mkdir -p "$OUT"
 
 die() { echo "error: $*" >&2; exit 1; }
+digest() { docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | jq -r .digest; }
 
 fetch() {
   [[ -d $SRC ]] || git -c advice.detachedHead=false clone -q --depth 1 --branch "$FORK_REF" "$FORK_REPO" "$SRC"
@@ -65,20 +66,18 @@ verify() {
 }
 
 push() {
-  docker push -q "$BASE"
-  local base_digest
-  base_digest=$(docker buildx imagetools inspect "$BASE" --format '{{json .Manifest}}' | jq -r .digest)
-  controller "$BASE@$base_digest"
+  docker push -q "$BASE" >/dev/null
+  controller "$BASE@$(digest "$BASE")"
   verify
-  docker push -q "$CONTROLLER"
+  docker push -q "$CONTROLLER" >/dev/null
   if [[ -n ${EXTRA_TAG:-} ]]; then
     for image in "$BASE" "$CONTROLLER"; do
       docker tag "$image" "${image%:*}:$EXTRA_TAG"
-      docker push -q "${image%:*}:$EXTRA_TAG"
+      docker push -q "${image%:*}:$EXTRA_TAG" >/dev/null
     done
   fi
-  docker buildx imagetools inspect "$CONTROLLER" --format '{{json .Manifest}}' | jq -r '"'"$CONTROLLER"'@" + .digest' \
-    | tee "$OUT/image.txt"
+  printf 'BASE_IMAGE=%s@%s\nCONTROLLER_IMAGE=%s@%s\n' "$BASE" "$(digest "$BASE")" "$CONTROLLER" "$(digest "$CONTROLLER")" \
+    | tee "$OUT/images.env"
 }
 
 clean() {

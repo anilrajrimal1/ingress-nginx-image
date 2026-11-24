@@ -1,4 +1,4 @@
-name: build
+name: Build ingress-nginx image
 
 on:
   pull_request:
@@ -20,6 +20,7 @@ concurrency:
 
 jobs:
   fork-release:
+    name: Check fork release
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7.0.1
@@ -36,6 +37,7 @@ jobs:
           fi
 
   build:
+    name: Build, verify and push
     if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -69,6 +71,45 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - if: inputs.push && github.ref == 'refs/heads/main'
-        run: ./build.sh push >> "$GITHUB_STEP_SUMMARY"
+        run: ./build.sh push
+        env:
+          EXTRA_TAG: sha-${{ github.sha }}
+
+      - name: Summary
+        run: |
+          source versions.env
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## ingress-nginx controller $CONTROLLER_TAG
+
+          | | |
+          |---|---|
+          | Fork | \`$FORK_REF\` (\`${FORK_COMMIT:0:7}\`) |
+          | nginx | $NGINX_VERSION, $(wc -l < work/out/patches.txt)/$NGINX_PATCHES patches applied |
+          | Go | $GO_VERSION |
+          | Trivy | no fixable critical or high vulnerabilities |
+          EOF
+
+          [[ -f work/out/images.env ]] || exit 0
+          source work/out/images.env
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+
+          ### Images
+
+          - \`$BASE_IMAGE\`
+          - \`$CONTROLLER_IMAGE\`
+
+          Also tagged \`$EXTRA_TAG\`.
+
+          ### Helm values
+
+          \`\`\`yaml
+          controller:
+            image:
+              registry: ghcr.io
+              image: ${REGISTRY#ghcr.io/}/controller
+              tag: $CONTROLLER_TAG
+              digest: ${CONTROLLER_IMAGE#*@}
+          \`\`\`
+          EOF
         env:
           EXTRA_TAG: sha-${{ github.sha }}
