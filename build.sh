@@ -47,12 +47,29 @@ controller() {
   docker rmi -f "local/controller:$CONTROLLER_TAG" >/dev/null
 }
 
+verify() {
+  docker image inspect "$BASE" "$CONTROLLER" | jq -e '(.[0].RootFS.Layers) as $b | .[1].RootFS.Layers[:($b | length)] == $b' >/dev/null \
+    || die "controller is not built on $BASE"
+
+  [[ $(docker run --rm --entrypoint nginx "$CONTROLLER" -v 2>&1) == *"nginx/$NGINX_VERSION"* ]] || die "wrong nginx version"
+  [[ $(docker run --rm --entrypoint /nginx-ingress-controller "$CONTROLLER" --version) == *"$CONTROLLER_TAG"* ]] \
+    || die "wrong controller version"
+  "$TRIVY" image -q --format json --list-all-pkgs "$CONTROLLER" \
+    | jq -e --arg v "v$GO_VERSION" '[.Results[].Packages[]? | select(.Name == "stdlib") | .Version] | unique == [$v]' >/dev/null \
+    || die "binaries are not built with Go $GO_VERSION"
+
+  for image in "$BASE" "$CONTROLLER"; do
+    "$TRIVY" image -q --skip-db-update --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 "$image"
+  done
+  echo "ok: controller $CONTROLLER_TAG, nginx $NGINX_VERSION ($NGINX_PATCHES patches), go $GO_VERSION"
+}
+
 clean() {
   docker run --rm -v "$PWD:/r" "$ALPINE" rm -rf /r/work
 }
 
 case "${1:-build}" in
   build) fetch; base; binaries; controller ;;
-  clean) clean ;;
-  *) die "usage: $0 [build|clean]" ;;
+  verify | clean) "$1" ;;
+  *) die "usage: $0 [build|verify|clean]" ;;
 esac
